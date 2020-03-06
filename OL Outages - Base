@@ -1,0 +1,610 @@
+
+Sys.setenv(JAVA_HOME = "C:\\Program Files\\Java\\openjdk8u232\\jre") # for 64-bit version
+
+
+# install packages
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(shinyWidgets, tidyverse, xlsx, ggiraph, RJDBC, splitstackshape, readxl, lubridate, dplyr, svDialogs, tcltk, shiny, shinydashboard, stringr, ggplot2, plotly, timevis, data.table, RColorBrewer, patternplot, DT)
+
+# clear the environment pane
+rm(list = ls())
+
+# Get BI username
+
+My_Username <- Sys.info()["user"]
+# #Get database password
+pathVar <- paste0("\\\\iso-ne.com\\shares", "\\", My_Username, "\\passwords.csv")
+passVar <- data.frame(read.csv(pathVar, stringsAsFactors = FALSE))
+passVarO <- passVar[1, 2]
+passVarBI <- passVar[2, 2]
+
+My_BIPassword <- passVarBI
+
+# Query 2 for BI system. BIPROD for warehouse. BIPROD2 for Direct Access
+BI_System_2 <- "BIPROD2"
+
+# Query 2 for BI
+
+BI_Query_9 <-
+
+  "
+
+SELECT
+\"Outage\".\"Outages\".\"Outage Request ID\" as OUTAGE_REQUEST_ID,
+\"Outage\".\"Outages\".\"Outage Priority Description\" as OUTAGE_PRIORITY_DESCRIPTION,
+\"Outage\".\"Outages\".\"Requesting Company Name\" as REQUESTING_COMPANY_NAME,
+\"Outage\".\"Outages\".\"Outage Status Description\" as OUTAGE_STATUS_DESCRIPTION, 
+\"Outage\".\"Outages\".\"Outage Description Text\" as OUTAGE_DESCRIPTION_TEXT, 
+\"Outage\".\"Outages\".\"Station Name Abbv\" as STATION_NAME_ABBV,
+\"Outage\".\"Outages\".\"Outage Requested Equipment Text\" as OUTAGE_REQUESTED_EQUIPMENT_TEXT, 
+\"Outage\".\"Outages\".\"Cause Type\" as CAUSE_TYPE,
+\"Outage\".\"Outages\".\"Subcause Type\" as SUBCAUSE_TYPE, 
+\"Outage\".\"Outages\".\"Create Date (Local)\" as CREATE_DATE_LOCAL, 
+\"Outage\".\"Outages\".\"Priority Date (Local)\" as PRIORITY_DATE_LOCAL, 
+\"Outage\".\"Outages\".\"Planned Start Date (Local)\" as PLANNED_START_DATE_LOCAL, 
+\"Outage\".\"Outages\".\"Planned End Date (Local)\" as PLANNED_END_DATE_LOCAL, 
+\"Outage\".\"Outages\".\"Recall Time Value\" as RECALL_TIME_VALUE,
+\"Outage\".\"Outages\".\"Recall Time Units\" as RECALL_TIME_UNITS, 
+\"Outage\".\"Outages\".\"Recurrence Type\" as RECURRENCE_TYPE,
+\"Outage\".\"Outages\".\"Outage Category Description\" as OUTAGE_CATEGORY
+
+FROM\"Outage\" WHERE ( (\"Studies\".\"Interface Limitation Flag\" = 'Yes'))
+
+AND (\"Outages\".\"Outage Status Description\" <> 'Cancelled')
+AND (\"Outages\".\"Outage Status Description\" <> 'Denied')
+AND (\"Outages\".\"Outage Status Description\" <> 'Completed')
+AND (\"Outages\".\"Outage Status Description\" <> 'Withdrawn')
+AND (\"Outage\".\"Outages\".\"Cause Type\" <> 'MODELING')
+AND (\"Outages\".\"Outage Requested Equipment Text\" LIKE '%OOS%')
+AND (\"Outages\".\"Outage Request ID\"> '19000000')
+
+
+
+
+
+
+"
+
+
+#(\"Outages\".\"Planned Start Date (Local)\" >=timestampadd(sql_tsi_day,-1, current_date) ) 
+#AND
+
+# Loading JDBC to connect to Oracle
+driver <- JDBC("oracle.bi.jdbc.AnaJdbcDriver", "c:/RJDBC/bijdbc.jar", identifier.quote = "'")
+
+
+# Connect to BI for query 2
+Connection_2 <- dbConnect(driver, paste("jdbc:oraclebi://", BI_System_2, ".iso-ne.com:9703/", sep = ""), My_Username, My_BIPassword)
+# Query Results
+
+OVERLAP <- dbGetQuery(Connection_2, BI_Query_9)
+# Close connection 2
+dbDisconnect(Connection_2)
+
+# Query for BI
+
+BI_Query_7 <-
+
+  "
+SELECT
+\"Outage\".\"Outages\".\"Outage Request ID\" as OUTAGE_REQUEST_ID, 
+MAX(\"Outage\".\"Equipment\".\"Voltage Class\") as VOLTAGE_CLASS
+FROM\"Outage\" 
+"
+
+#WHERE ((\"Outages\".\"Planned Start Date (Local)\" >=timestampadd(sql_tsi_day,-1, current_date) ) )
+
+# Loading JDBC to connect to Oracle
+driver <- JDBC("oracle.bi.jdbc.AnaJdbcDriver", "c:/RJDBC/bijdbc.jar", identifier.quote = "'")
+
+
+# Connect to BI for query 2
+Connection_2 <- dbConnect(driver, paste("jdbc:oraclebi://", BI_System_2, ".iso-ne.com:9703/", sep = ""), My_Username, My_BIPassword)
+# Query Results
+
+VOLTAGE <- dbGetQuery(Connection_2, BI_Query_7)
+# Close connection 2
+dbDisconnect(Connection_2)
+
+TYPEList <- unique(OVERLAP [c(17)])
+
+OVERLAP$CREATE_DATE_LOCAL <- as_date(OVERLAP$CREATE_DATE_LOCAL)
+OVERLAP$PRIORITY_DATE_LOCAL <- as_date(OVERLAP$PRIORITY_DATE_LOCAL)
+OVERLAP$PLANNED_START_DATE_LOCAL <- as_date(OVERLAP$PLANNED_START_DATE_LOCAL)
+OVERLAP$PLANNED_END_DATE_LOCAL <- as_date(OVERLAP$PLANNED_END_DATE_LOCAL)
+OVERLAP <- OVERLAP[order(OVERLAP$PLANNED_START_DATE_LOCAL), ]
+outage.desc <- factor(OVERLAP$OUTAGE_STATUS_DESCRIPTION)
+
+chartColors <- c("Potential" = "darkviolet","Implemented" = "gray54", "Approved" = "Blue", "Interim Approved" = "green4", "Preliminary" = "hotpink", "Negotiate" = "tan4", "Study" = "sandybrown", "Submitted" = "Red", "Cancelled" = "Maroon")
+chartShapes <- c("Generation" = 16, "Transmission" = 18)
+
+# clear part of the environment pane
+rm(list = ls()[grep("^passVar", ls())])
+rm(My_BIPassword)
+
+EMS_Areas <- read_excel("\\\\iso-ne.com\\shares\\performance_auditing\\OverlappingOutages\\load_area.xlsx")
+
+AREAS <- as.data.frame(EMS_Areas)
+#AREAlist <- as.data.frame(EMS_Areas)
+
+AREAS <- AREAS %>%
+  select(2, 3)
+colnames(AREAS) <- c("STATION_NAME_ABBV", "AREA")
+AREAS <- add_row(AREAS, "STATION_NAME_ABBV" = "", "AREA" = "")
+
+station <- list(OVERLAP$STATION_NAME_ABBV)
+Station2 <- gsub('"', "", station)
+Station2 <- gsub(" ", "", station)
+Station2 <- gsub("
+", "", station)
+
+# Station2 <- unlist(Station)
+
+StaList <- as.list(strsplit(Station2, ",")[[1]])
+StaList <- gsub('"', "", StaList)
+StaList <- gsub(")", "", StaList)
+StaList <- gsub(" ", "", StaList)
+StaList <- unique(StaList)
+Stations <- as.data.frame(StaList)
+Stations <- Stations[order(Stations$StaList), c(1)]
+Stations <- as.data.frame(Stations)
+
+# MergedData <- left_join(OVERLAP, AREAS,by = c("STATION_NAME_ABBV" = "STATION_NAME_ABBV"))
+
+tempSta <- as.data.frame(OVERLAP$STATION_NAME_ABBV)
+colnames(tempSta) <- c("STATION_NAME_ABBV")
+tempSta <- unique(tempSta)
+tempSta <- tempSta[order(tempSta$STATION_NAME_ABBV), c(1)]
+tempSta <- as.data.frame(tempSta)
+colnames(tempSta) <- c("STATION_NAME_ABBV")
+
+# break multiple stations from single column to multiple
+brkn <- as.data.frame(cSplit(tempSta, "STATION_NAME_ABBV", ","))
+brkn <- sapply(brkn, as.character)
+brkn[is.na(brkn)] <- ""
+brkn <- as.data.frame(brkn)
+brknAREA <- data.frame(brkn)
+
+clmn <- ncol(brkn)
+
+
+paste_noNA <- function(x, sep = ", ") {
+  gsub(", ", sep, toString(x[!is.na(x) & x != "" & x != "NA"]))
+}
+
+if ("STATION_NAME_ABBV_1" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brkn, AREAS, by.x = "STATION_NAME_ABBV_1", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_01"
+}
+if ("STATION_NAME_ABBV_2" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_2", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_02"
+}
+if ("STATION_NAME_ABBV_3" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_3", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_03"
+}
+if ("STATION_NAME_ABBV_4" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_4", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_04"
+}
+if ("STATION_NAME_ABBV_5" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_5", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_05"
+}
+if ("STATION_NAME_ABBV_6" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_6", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_06"
+}
+if ("STATION_NAME_ABBV_7" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_7", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_07"
+}
+if ("STATION_NAME_ABBV_8" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_8", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_08"
+}
+if ("STATION_NAME_ABBV_9" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_9", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_09"
+}
+
+
+
+
+if ("STATION_NAME_ABBV_01" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brkn, AREAS, by.x = "STATION_NAME_ABBV_01", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_01"
+}
+if ("STATION_NAME_ABBV_02" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_02", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_02"
+}
+if ("STATION_NAME_ABBV_03" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_03", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_03"
+}
+if ("STATION_NAME_ABBV_04" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_04", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_04"
+}
+if ("STATION_NAME_ABBV_05" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_05", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_05"
+}
+if ("STATION_NAME_ABBV_06" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_06", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_06"
+}
+if ("STATION_NAME_ABBV_07" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_07", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_07"
+}
+if ("STATION_NAME_ABBV_08" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_08", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_08"
+}
+if ("STATION_NAME_ABBV_09" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_09", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_09"
+}
+if ("STATION_NAME_ABBV_10" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_10", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_10"
+}
+if ("STATION_NAME_ABBV_11" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_11", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_11"
+}
+if ("STATION_NAME_ABBV_12" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_12", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_12"
+}
+if ("STATION_NAME_ABBV_13" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_13", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_13"
+}
+if ("STATION_NAME_ABBV_14" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_14", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_14"
+}
+if ("STATION_NAME_ABBV_15" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_15", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_15"
+}
+if ("STATION_NAME_ABBV_16" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_16", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_16"
+}
+if ("STATION_NAME_ABBV_17" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_17", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_17"
+}
+if ("STATION_NAME_ABBV_18" %in% colnames(brknAREA)) {
+  brknAREA <- merge(brknAREA, AREAS, by.x = "STATION_NAME_ABBV_18", by.y = "STATION_NAME_ABBV", all.x = TRUE)
+  names(brknAREA)[names(brknAREA) == "AREA"] <- "AREA_18"
+}
+
+brknAREA <- brknAREA[, order(colnames(brknAREA))]
+
+# combine all station columns into one
+brknAREA$AREAS <- apply(brknAREA[, c(1:clmn) ], 1, paste_noNA, sep = ", ")
+
+# remove the stations
+brknAREA <- subset(brknAREA, select = -c(1:clmn))
+
+
+# combine all AREA columns into one
+brknAREA$STATION_NAME_ABBV <- apply(brknAREA[, c(1:clmn) ], 1, paste_noNA, sep = ", ")
+# remove the stations
+brknAREA <- subset(brknAREA, select = -c(1:clmn))
+
+OVERLAP_STA <- left_join(OVERLAP, brknAREA, by = "STATION_NAME_ABBV")
+
+# Remove duplicates AREAS from the AREAS column ("VELCO, VELCO, VELCO") so the plotting is clearer
+OVERLAP_STA$AREAS <- sapply(OVERLAP_STA$AREAS, function(x) paste(unique(unlist(str_split(x, ", "))), collapse = ", "))
+
+OVERLAP_STA$AREAS <- sapply(OVERLAP_STA$AREAS, function(x) paste(sort(unlist(str_split(x, ", "))), collapse = ", "))
+
+OVERLAP_vol <- left_join(OVERLAP_STA, VOLTAGE, by = "OUTAGE_REQUEST_ID")
+OVERLAP_vol$VOLTAGE_CLASS[is.na(OVERLAP_vol$VOLTAGE_CLASS)] <- 0
+
+OVERLAP_vol$Duration <- (OVERLAP_vol$PLANNED_END_DATE_LOCAL - OVERLAP_vol$PLANNED_START_DATE_LOCAL) + 1
+
+OVERLAP_vol$Tooltips <- c(paste0("Outage Request ID = ", OVERLAP_vol$OUTAGE_REQUEST_ID, "\n Outage Category = ", OVERLAP_vol$OUTAGE_CATEGORY, "\n Max kV = ", OVERLAP_vol$VOLTAGE_CLASS, "\n Planned Dates = ", as.character(OVERLAP_vol$PLANNED_START_DATE_LOCAL, format = "%m/%d/%Y"), " to ", as.character(OVERLAP_vol$PLANNED_END_DATE_LOCAL, format = "%m/%d/%Y"), "\n Duration = ", OVERLAP_vol$Duration, " days", "\n Stations = ", OVERLAP_vol$STATION_NAME_ABBV))
+
+OVERLAP_STA <- distinct(OVERLAP_STA)
+OVERLAP_vol <- distinct(OVERLAP_vol)
+OVERLAP_vol$AREAS <- sub("^$", "EXTERNAL", OVERLAP_vol$AREAS)
+
+AREAlist <- c("CT","EXTERNAL", "MAINE","NEMABOS","NEWHAMP","RI","SEMA","VERMONT", "WCMASS")
+AREAlist <- data.frame((AREAlist))
+colnames(AREAlist) <- c("AREA")
+AREAlist <- AREAlist[order(AREAlist), ]
+AREAlist <- as.data.frame(AREAlist)
+
+#This code will provide a unique listing of all combinations of areas for choosing
+# AREAlist <- OVERLAP_vol %>% select(18)
+# colnames(AREAlist) <- c("AREA")
+# AREAlist <- unique(AREAlist$AREA)
+# AREAlist <- as.data.frame(AREAlist)
+# AREAlist <- AREAlist[order(AREAlist), ]
+# AREAlist <- as.data.frame(AREAlist)
+
+
+
+
+#### Get Potential Outage List
+
+potentialData <- read_excel("\\\\iso-ne.com\\shares\\performance_auditing\\OverlappingOutages\\potential.xlsx"
+                            , 
+                            col_types = c("text", "text", "text", 
+                                          "numeric", "text", "numeric", "text", 
+                                          "numeric", "text", "text", "text", 
+                                          "date", "date", "numeric", "text", 
+                                          "text", "numeric", "numeric", "text", 
+                                          "text", "numeric", "numeric", "numeric", 
+                                          "numeric", "numeric", "numeric", 
+                                          "numeric", "text"))
+
+rws <-nrow(potentialData)+30000000
+
+
+
+potential_vol <- potentialData %>%
+#select(27,	27,	27,	2,	11,	9,	1,	27,	27,	27,	27,	12,	13,	27,	27,	27,	27,	27,	7,	14, 21)
+  select(2,	11,	9,	1,	12,	13,	7,	14, 28)
+colnames(potential_vol)[1]<-"OUTAGE_STATUS_DESCRIPTION"
+colnames(potential_vol)[2]<-"OUTAGE_DESCRIPTION_TEXT"
+colnames(potential_vol)[3]<-"STATION_NAME_ABBV"
+colnames(potential_vol)[4]<-"OUTAGE_REQUESTED_EQUIPMENT_TEXT"
+colnames(potential_vol)[5]<-"PLANNED_START_DATE_LOCAL"
+colnames(potential_vol)[6]<-"PLANNED_END_DATE_LOCAL"
+colnames(potential_vol)[7]<-"VOLTAGE_CLASS"
+colnames(potential_vol)[8]<-"Duration"
+colnames(potential_vol)[9]<-"AREAS"
+
+
+potential_vol$PLANNED_START_DATE_LOCAL <-as.character(potential_vol$PLANNED_START_DATE_LOCAL, format = "%m/%d/%Y")
+potential_vol$PLANNED_END_DATE_LOCAL <- as.character(potential_vol$PLANNED_END_DATE_LOCAL, format = "%m/%d/%Y")
+potential_vol$PLANNED_START_DATE_LOCAL <- as.Date(potential_vol$PLANNED_START_DATE_LOCAL, "%m/%d/%Y")
+potential_vol$PLANNED_END_DATE_LOCAL <- as.Date(potential_vol$PLANNED_END_DATE_LOCAL, "%m/%d/%Y")
+
+
+potential_vol$OUTAGE_REQUEST_ID <-seq(30000001,rws)
+potential_vol$OUTAGE_STATUS_DESCRIPTION <- "Potential"
+potential_vol$OUTAGE_CATEGORY <- "Transmission"
+#potential_vol$AREAS <- "CT"
+potential_vol$Tooltips <- paste("Project Name = ",potential_vol$OUTAGE_REQUESTED_EQUIPMENT_TEXT ,"\n Description = ",potential_vol$OUTAGE_DESCRIPTION_TEXT, "\n 1-Line Designation = ", potential_vol$STATION_NAME_ABBV,"\n Max kV = ", potential_vol$VOLTAGE_CLASS,"\n Planned Dates = ", as.character(potential_vol$PLANNED_START_DATE_LOCAL, format = "%m/%d/%Y") ," to ",as.character(potential_vol$PLANNED_END_DATE_LOCAL, format = "%m/%d/%Y"), "\n Duration = ", potential_vol$Duration)
+
+OVERLAP_vol<- merge(OVERLAP_vol,potential_vol,all = TRUE)
+
+
+
+  
+potential_sta <- potential_vol %>% select(1,2,3,4,5,6,9,10,11)
+OVERLAP_STA<- merge(OVERLAP_STA,potential_sta,all = TRUE)
+
+OutageListing <- sort(OVERLAP_vol$OUTAGE_REQUEST_ID, decreasing = FALSE)
+
+
+##########################################################################################################
+##########################################################################################################
+##########################################################################################################
+
+ui <- fluidPage(
+  
+  chooseSliderSkin("Flat"),
+
+  titlePanel("Overlapping Outages by Outage ID"),
+
+  # put in drop-down and date range boxes in sidebar-panel
+  sidebarLayout(
+    
+
+    sidebarPanel(
+      
+      width = 4,
+
+      helpText(paste0("This UI shows overlaping outages for a user-selected Outage ID. Available dates for viewing are: "
+                      , as.character(min(OVERLAP_STA$PLANNED_START_DATE_LOCAL), format = "%m/%d/%Y"),
+                      " to "
+                      , as.character(max(OVERLAP_STA$PLANNED_END_DATE_LOCAL), format = "%m/%d/%Y"),
+                      ". There are "
+                      , nrow(OVERLAP),
+                      " outage records loaded.")),
+
+      # Drop down with choices
+      selectizeInput("OutageList",
+        label = "Choose an Outage ID:",
+        choices = c(OutageListing),
+        options = list(maxOptions = 2000),
+        selected = min(OutageListing)
+        ),
+
+      hr(),
+      helpText(paste0("You have selected:")),
+      tableOutput(outputId = "SingleTable"),
+
+      hr(),
+
+      # selectInput("OutArea",
+      #             label = "Choose an Area:",
+      #             choices = c(AREASList),
+      #             selected = " "
+      # ),
+      #
+      # hr(),
+
+      column(
+        pickerInput("AREASlist", "Choose Area(s) to display:",
+                    choices = as.character(AREAlist$AREAlist), options = list("actions-box" = TRUE),
+                    multiple = TRUE, selected = as.character(AREAlist$AREAlist)), width = 8),
+      
+      
+      column(  
+        radioButtons("radio",
+                     label = h5("Show Outage Types:"),
+                     choices = list("Both" = 3, "Transmission" = 2, "Generation" = 1),
+                     selected = 3
+        ),width=2),
+      
+      column(
+        h5("Show kV Values?"),
+        checkboxInput('kvSelect', 'Show kV', 
+                      value = FALSE),width = 2),
+      
+      br(),
+      br(),
+      hr(),
+      fluidRow(),
+      fluidRow(
+        style = "max-height: 50vh; overflow-y: auto;",
+        tableOutput(outputId = "table")
+      )
+      
+    ),
+
+    # Read back choices, and build plot in main panel
+    mainPanel(
+
+      # textOutput("selected_daterange"),
+      ggiraphOutput("chart", width = "1600px", height = "1600px"),
+      br(),
+      textOutput("AREAS")
+    )
+  )
+)
+
+
+
+server <- function(input, output, session) {
+  
+  aChoice <- reactive({
+    as.character(input$AREASlist)
+  })
+  
+  output$SingleTable <- renderTable(SingleTableData())
+  output$table <- renderTable(tableData())
+
+  df <- OVERLAP_vol
+  df$Duration <- (df$PLANNED_END_DATE_LOCAL - df$PLANNED_START_DATE_LOCAL) + 1
+  df$modifiedEnd <- df$PLANNED_END_DATE_LOCAL + 1
+
+  graphplot <- reactive({
+    OutageData <- filter(df, grepl(input$OutageList, df$OUTAGE_REQUEST_ID))
+    #OutageData <- filter(df, grepl("30000001", df$OUTAGE_REQUEST_ID))
+
+    OutStart <- OutageData$PLANNED_START_DATE_LOCAL
+    OutEnd <- OutageData$PLANNED_END_DATE_LOCAL
+    OutageArea <- OutageData$AREAS
+
+    #graphplot <- filter(df,grepl("SEMA", df$AREAS))
+
+    # All outages that fit inside the selected Start and end times
+    graphplotShort <- df[as.Date(df$PLANNED_START_DATE_LOCAL) >= as.Date(OutStart) & as.Date(df$PLANNED_END_DATE_LOCAL) <= as.Date(OutEnd), ]
+     #graphplotShort <- df[as.Date(df$PLANNED_START_DATE_LOCAL) >= "2020/03/01" & as.Date(df$PLANNED_END_DATE_LOCAL) <= "2020/03/31",]
+
+    # All outages that begin before selected start time but continue and end in the selected range
+    graphplotPre <- df[as.Date(df$PLANNED_START_DATE_LOCAL) <= as.Date(OutStart) & as.Date(df$PLANNED_END_DATE_LOCAL) >= as.Date(OutStart) & as.Date(df$PLANNED_END_DATE_LOCAL) <= as.Date(OutEnd) , ]
+    #graphplotPre <- df[as.Date(df$PLANNED_START_DATE_LOCAL) <= "2020/03/01" & as.Date(df$PLANNED_START_DATE_LOCAL) >= "2020/03/31", ]
+
+    # All outages that begin after selected start time but continue after the selected end time
+    graphplotPost <- df[as.Date(df$PLANNED_START_DATE_LOCAL) >= as.Date(OutStart) & as.Date(df$PLANNED_END_DATE_LOCAL) >= as.Date(OutEnd) & as.Date(df$PLANNED_START_DATE_LOCAL) <= as.Date(OutEnd),]
+     #graphplotPost <- df[as.Date(df$PLANNED_END_DATE_LOCAL) >= "2020/03/01" & as.Date(df$PLANNED_END_DATE_LOCAL) <= "2020/03/31", ]
+
+    # All outages that begin before the selected start time and continue past the selected end time
+    graphplotLong <- df[as.Date(df$PLANNED_START_DATE_LOCAL) < as.Date(OutStart) & as.Date(df$PLANNED_END_DATE_LOCAL) > as.Date(OutEnd), ]
+     #graphplotLong <- df[as.Date(df$PLANNED_START_DATE_LOCAL) < "2020/03/01" & as.Date(df$PLANNED_END_DATE_LOCAL) > "2020/03/31", ]
+
+    graphplot <- rbind(graphplotShort, graphplotPre, graphplotPost, graphplotLong)
+
+    graphplot <- unique(graphplot)
+
+    graphplot <- graphplot[order(as.Date(graphplot$PLANNED_START_DATE_LOCAL, format = "%Y/%m/%d")), ]
+
+    names(graphplot)[names(graphplot) == "OUTAGE_STATUS_DESCRIPTION"] <- "Current_Outage_Status"
+    graphplot$outage.number <- 1:nrow(graphplot)
+    graphplot <- as.data.frame((graphplot))
+    
+    graphplot[,'AREAS'] <- gsub(","," ",graphplot[,'AREAS'])
+    
+    aChoice <- aChoice()
+  
+    graphplot <- graphplot[grepl(paste(aChoice, collapse="|"), graphplot$AREAS),]
+      #graphplota <- graphplot %>% filter(str_detect(AREAS, c("CT", "SEMA","NEMABOS","RI","MAINE","WCMASS","EXTERNAL","NEWHAMP","VERMONT")))
+
+
+
+    if (input$radio == "1") {
+      graphplot <- graphplot[graphplot$OUTAGE_CATEGORY == "Generation", ]
+    }
+    else if (input$radio == "2") {
+      graphplot <- graphplot[graphplot$OUTAGE_CATEGORY == "Transmission", ]
+    }
+    else {
+      graphplot
+    }
+  })
+
+
+  SingleTableData <- reactive({
+    SingleTableData <- filter(df, grepl(input$OutageList, df$OUTAGE_REQUEST_ID))
+    #SingleTableData <- filter(df, grepl("30000001", df$OUTAGE_REQUEST_ID))
+
+    STOutStart <- SingleTableData$PLANNED_START_DATE_LOCAL
+    STOutEnd <- SingleTableData$PLANNED_END_DATE_LOCAL
+    STOutageArea <- SingleTableData$AREAS
+
+    SingleTableData <- SingleTableData %>%
+      select(1, 5, 6, 7, 8, 9)
+
+    colnames(SingleTableData) <- c("ID", "Equipment", "Plan_Start", "Plan_End", "Type", "Area")
+    SingleTableData$Plan_Start <- as.character(SingleTableData$Plan_Start, "%m/%d/%y")
+    SingleTableData$Plan_End <- as.character(SingleTableData$Plan_End, "%m/%d/%y")
+    SingleTableData$ID <- as.character(SingleTableData$ID)
+    SingleTableData <- as.data.frame((SingleTableData))
+  })
+
+  tableData <- reactive({
+
+    tableData <- graphplot()
+    
+    tableData <- tableData %>%
+      select(1, 5, 6, 7, 8, 9)
+
+    colnames(tableData) <- c("ID", "Equipment", "Plan_Start", "Plan_End", "Type", "Area")
+    tableData$Plan_Start <- as.character(tableData$Plan_Start, "%m/%d/%y")
+    tableData$Plan_End <- as.character(tableData$Plan_End, "%m/%d/%y")
+    tableData$ID <- as.character(tableData$ID)
+    tableData <- as.data.frame((tableData))
+    tableData
+
+  })
+
+  # put the plot next
+  output$chart <-
+    renderggiraph({
+      h <- ggplot(graphplot(), aes(x = PLANNED_START_DATE_LOCAL, xend = PLANNED_END_DATE_LOCAL + 1, y = outage.number, yend = outage.number, color = Current_Outage_Status, label = OUTAGE_REQUEST_ID, shape = OUTAGE_CATEGORY)) +
+        geom_segment(size = 4) +
+        scale_x_date(breaks = "1 week", date_labels = "%m/%d/%Y") +
+        theme(axis.text.x = element_text(angle = 90)) +
+        theme(axis.text.y = element_blank()) +
+        theme(axis.ticks = element_blank()) +
+        theme(panel.grid.major.y = element_blank()) +
+        theme(panel.grid.minor.y = element_blank()) +
+        labs(title = paste0("Showing all overlapping outages with the following Outage ID: 1-", input$OutageList, " "), x = "Date", y = "", caption = "Source: CROW Outage Database") +
+        labs(fill = "New Legend Title") +
+        scale_color_manual(values = chartColors) +
+        scale_shape_manual(values = chartShapes) +
+        geom_point_interactive(aes(tooltip = Tooltips), size = 5)
+      if(input$kvSelect) {
+        h <- h+ geom_text(aes(label = VOLTAGE_CLASS, hjust = 2), color = "black", size = 3.5) 
+      }
+      h
+      ggiraph(code = print(h), width_svg = 22, height_svg = 17)
+    })
+}
+
+# all done, run the app
+shinyApp(ui, server)
